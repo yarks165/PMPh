@@ -31,7 +31,7 @@ from memit.memit_rect_main import apply_memit_rect_to_model
 from AlphaEdit import AlphaEditHyperParams
 from AlphaEdit.AlphaEdit_main import apply_AlphaEdit_to_model, get_cov
 from PMPh import PMPhHyperParams
-from PMPh.PMPh_main import apply_PMPh_to_model
+from PMPh.PMPh_main import apply_PMPh_to_model, get_cov as get_cov_pmph
 from rome import ROMEHyperParams, apply_rome_to_model
 from util import nethook
 from util.globals import *
@@ -77,6 +77,7 @@ def main(
     dir_name: str,
     num_edits: int = 1,
     use_cache: bool = False,
+    downstream_eval_steps: int = 0,
 ):
     # Set algorithm-specific variables
     params_class, apply_algo = ALG_DICT[alg_name]
@@ -222,7 +223,7 @@ def main(
     if alg_name in ["AlphaEdit", "PMPh"]:
         # Initialize projection matrices.
         for i, layer in enumerate(hparams.layers):
-            P[i, :, :] = get_project(model, tok, layer, hparams)
+            P[i, :, :] = get_project(model, tok, layer, hparams, alg_name)
         # torch.save(P, "null_space_project.pt")
 
     # The commented-out code below can be used to cache pre-edit hidden states.
@@ -267,7 +268,7 @@ def main(
         if alg_name == "PMPh":
             seq_args["K_p"] = K_p
         # nc_args will be set after P is initialized, since we need to know P is ready.
-        if cnt == 0 and args.downstream_eval_steps > 0:  # do initial GLUE EVAL WITH ORIGINAL MODEL
+        if cnt == 0 and downstream_eval_steps > 0:  # do initial GLUE EVAL WITH ORIGINAL MODEL
             glue_results = {'edit_num': -1}
 
             out_file = glue_save_location + "base.json"
@@ -409,7 +410,7 @@ def main(
         print("Execution took", exec_time)
         # Evaluate new model.
     
-        if args.downstream_eval_steps > 0 and cnt % args.downstream_eval_steps == 0:
+        if downstream_eval_steps > 0 and cnt % downstream_eval_steps == 0:
             glue_results = {
                         'edit_num': cnt*num_edits,
                         'case_id': case_ids
@@ -469,7 +470,7 @@ def main(
         #         nethook.get_parameter(model, k)[...] = v.to("cuda")
 
         print("Evaluation took", time() - start)
-def get_project(model, tok, layer, hparams):
+def get_project(model, tok, layer, hparams, alg_name="AlphaEdit"):
     """
     Compute the null-space projection matrix (based only on K_0) and cache
     its SVD components U_0 and S_0 for later incremental updates.
@@ -487,7 +488,10 @@ def get_project(model, tok, layer, hparams):
     model_name = model.config._name_or_path.replace("/", "_")
     cache_key = (model_name, layer)
     
-    cov = get_cov(
+    # Select the appropriate get_cov function based on algorithm
+    get_cov_func = get_cov_pmph if alg_name == "PMPh" else get_cov
+    
+    cov = get_cov_func(
         model,
         tok,
         hparams.rewrite_module_tmp.format(layer),
@@ -626,4 +630,5 @@ if __name__ == "__main__":
         dir_name=args.alg_name,
         num_edits=args.num_edits,
         use_cache=args.use_cache,
+        downstream_eval_steps=args.downstream_eval_steps,
     )
