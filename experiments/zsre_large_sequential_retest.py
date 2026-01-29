@@ -2,8 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure that the repository root and local modules are correctly resolved
-# no matter where this script is executed from.
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 os.chdir(_REPO_ROOT)
@@ -122,7 +121,7 @@ def _init_seq_state(
     """
     Returns (cache_c, P, K_p) for sequential algorithms.
     """
-    if alg_name not in {"AlphaEdit", "MEMIT_seq", "NSE"}:
+    if alg_name not in {"AlphaEdit", "PMPh", "MEMIT_seq", "NSE"}:
         return None, None, None
 
     W_out = nethook.get_parameter(
@@ -144,9 +143,13 @@ def _init_seq_state(
         for i, layer in enumerate(hparams.layers):
             # Always use the non-whitened nullspace projection based on K_0.
             P[i, :, :] = _get_project(model, tok, layer, hparams)
-
-        if getattr(hparams, "use_schur_complement_method", False):
-            K_p = [None] * len(hparams.layers)
+    elif alg_name == "PMPh":
+        P = torch.zeros((len(hparams.layers), d, d), device="cpu")
+        for i, layer in enumerate(hparams.layers):
+            # Always use the non-whitened nullspace projection based on K_0.
+            P[i, :, :] = _get_project(model, tok, layer, hparams)
+        # PMPh always uses the Schur-complement method, so always initialize K_p.
+        K_p = [None] * len(hparams.layers)
 
     del W_out
     return cache_c, P, K_p
@@ -403,7 +406,7 @@ def main():
         t0 = time()
         requests = _iter_requests(record_chunk)
 
-        cache_algs = {"ROME", "MEMIT", "MEMIT_rect", "AlphaEdit", "MEMIT_seq", "NSE"}
+        cache_algs = {"ROME", "MEMIT", "MEMIT_rect", "AlphaEdit", "PMPh", "MEMIT_seq", "NSE"}
         etc_args = (
             dict(cache_template=cache_template)
             if (cache_template is not None and args.alg_name in cache_algs)
@@ -411,18 +414,18 @@ def main():
         )
         seq_args = (
             dict(cache_c=cache_c)
-            if args.alg_name in {"AlphaEdit", "MEMIT_seq", "NSE"}
+            if args.alg_name in {"AlphaEdit", "PMPh", "MEMIT_seq", "NSE"}
             else dict()
         )
 
         nc_args: Dict[str, Any] = {}
         if args.alg_name == "AlphaEdit":
-            # Always pass in the projection matrices P based solely on K_0;
-            # whether K_p is constrained in the null space is handled separately.
+            # Always pass in the projection matrices P based solely on K_0.
             nc_args = dict(P=P)
-
-            if getattr(hparams, "use_schur_complement_method", False) and K_p is not None:
-                seq_args["K_p"] = K_p
+        elif args.alg_name == "PMPh":
+            # PMPh always uses the Schur-complement method, so always pass P and K_p.
+            nc_args = dict(P=P)
+            seq_args["K_p"] = K_p
 
         out = apply_algo(
             model,
@@ -437,6 +440,14 @@ def main():
         # Handle different algorithms' return formats.
         if isinstance(out, tuple):
             if args.alg_name == "AlphaEdit":
+                if len(out) == 3:
+                    model, cache_c, K_p = out
+                elif len(out) == 2:
+                    model, cache_c = out
+                else:
+                    model = out[0]
+            elif args.alg_name == "PMPh":
+                # PMPh always returns (model, cache_c, K_p) when using Schur-complement method.
                 if len(out) == 3:
                     model, cache_c, K_p = out
                 elif len(out) == 2:

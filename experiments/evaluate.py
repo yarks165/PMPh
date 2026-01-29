@@ -143,7 +143,7 @@ def main(
     # Get cache templates
     cache_template = None
     if use_cache:
-        if any(alg in alg_name for alg in ["MEMIT","AlphaEdit", "MEMIT_seq", "MEMIT_prune", "MEMIT_rect"]):
+        if any(alg in alg_name for alg in ["MEMIT","AlphaEdit", "PMPh", "MEMIT_seq", "MEMIT_prune", "MEMIT_rect"]):
             cache_template = (
                 KV_DIR
                 / f"{model_name.replace('/', '_')}_MEMIT"
@@ -199,25 +199,27 @@ def main(
                         },
                     )
                     print(f"Cached k/v pair at {cache_fname}")
-    if any(alg in alg_name for alg in ["AlphaEdit", "MEMIT_seq", "MEMIT_prune", "NSE"]):
+    if any(alg in alg_name for alg in ["AlphaEdit", "PMPh", "MEMIT_seq", "MEMIT_prune", "NSE"]):
         # Iterate through dataset
         W_out = nethook.get_parameter(model, f"{hparams.rewrite_module_tmp.format(hparams.layers[-1])}.weight")
         if hparams.model_name == "gpt2-xl":
             cache_c = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
             if alg_name == "AlphaEdit":
                 P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
-                # When using the Schur-complement method, initialize K_p as a
-                # container for the actual key matrices (not their outer products).
-                K_p = [None] * len(hparams.layers) if getattr(hparams, 'use_schur_complement_method', False) else None
+            elif alg_name == "PMPh":
+                P = torch.zeros((len(hparams.layers), W_out.shape[0], W_out.shape[0]), device="cpu")
+                # PMPh always uses the Schur-complement method, so always initialize K_p.
+                K_p = [None] * len(hparams.layers)
         elif hparams.model_name in ["EleutherAI_gpt-j-6B", "Llama3-8B", "phi-1.5"]:
             cache_c = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
             if alg_name == "AlphaEdit":
                 P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
-                # When using the Schur-complement method, initialize K_p as a
-                # container for the actual key matrices (not their outer products).
-                K_p = [None] * len(hparams.layers) if getattr(hparams, 'use_schur_complement_method', False) else None
+            elif alg_name == "PMPh":
+                P = torch.zeros((len(hparams.layers), W_out.shape[1], W_out.shape[1]), device="cpu")
+                # PMPh always uses the Schur-complement method, so always initialize K_p.
+                K_p = [None] * len(hparams.layers)
         del W_out
-    if alg_name == "AlphaEdit":
+    if alg_name in ["AlphaEdit", "PMPh"]:
         # Initialize projection matrices.
         for i, layer in enumerate(hparams.layers):
             P[i, :, :] = get_project(model, tok, layer, hparams)
@@ -259,10 +261,10 @@ def main(
             if conserve_memory
             else dict()
         )
-        etc_args = dict(cache_template=cache_template) if any(alg in alg_name for alg in ["ROME", "MEMIT", "AlphaEdit", "MEMIT_seq", "MEMIT_prune", "NSE"]) else dict()
-        seq_args = dict(cache_c=cache_c) if any(alg in alg_name for alg in ["AlphaEdit", "MEMIT_seq", "NSE"]) else dict()
-        # When using the Schur-complement method, pass K_p so it can be updated.
-        if alg_name == "AlphaEdit" and getattr(hparams, "use_schur_complement_method", False):
+        etc_args = dict(cache_template=cache_template) if any(alg in alg_name for alg in ["ROME", "MEMIT", "AlphaEdit", "PMPh", "MEMIT_seq", "MEMIT_prune", "NSE"]) else dict()
+        seq_args = dict(cache_c=cache_c) if any(alg in alg_name for alg in ["AlphaEdit", "PMPh", "MEMIT_seq", "NSE"]) else dict()
+        # PMPh always uses the Schur-complement method, so always pass K_p.
+        if alg_name == "PMPh":
             seq_args["K_p"] = K_p
         # nc_args will be set after P is initialized, since we need to know P is ready.
         if cnt == 0 and args.downstream_eval_steps > 0:  # do initial GLUE EVAL WITH ORIGINAL MODEL
@@ -278,12 +280,11 @@ def main(
             with open(output_filename, "w") as f:
                 json.dump(glue_results, f, indent=4)
         start = time()
-        if any(alg in alg_name for alg in ["AlphaEdit", "MEMIT_seq", "NSE"]):
-            # AlphaEdit always uses projection matrices P based only on K_0, without
-            # distinguishing whether K_p is constrained in the null space.
-            nc_args = dict(P=P) if alg_name == "AlphaEdit" else dict()
-            # When using the Schur-complement method, the return value may include K_p.
-            if alg_name == "AlphaEdit" and getattr(hparams, "use_schur_complement_method", False) and K_p is not None:
+        if any(alg in alg_name for alg in ["AlphaEdit", "PMPh", "MEMIT_seq", "NSE"]):
+            # AlphaEdit and PMPh always use projection matrices P based only on K_0.
+            nc_args = dict(P=P) if alg_name in ["AlphaEdit", "PMPh"] else dict()
+            # PMPh always uses the Schur-complement method and returns K_p.
+            if alg_name == "PMPh":
                 edited_model, cache_c, K_p = apply_algo(
                     model,
                     tok,
