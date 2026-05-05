@@ -2,7 +2,7 @@
 - Code for [``From Soft Penalties to Hard Constraints: Achieving Near Lossless Sequential Knowledge Editing with Projected Minimal Perturbation``]
 
 ![alt text](resource/pmph.png)
-*Figure: Illustration of the lossless sequential knowledge editing challenge and the proposed PMPh framework. (a) An ideal lossless edit must simultaneously satisfy three hard constraints. (b) Existing methods such as MEMIT and AlphaEdit rely on soft balancing or partial constraints, leading to inevitable trade-offs. (c) Forgetting of previously edited knowledge as sequential edits accumulate (1,000 edits in batches of 100 on ZsRE with LLaMA3-8B). AlphaEdit and MEMIT show increasing forgetting, while PMPh alleviates this. (d) PMPh achieves performance closer to lossless and minimizes projected disturbances through null-space projection and hard constraints.*
+*Figure: Illustration of knowledge interference in sequential knowledge editing and the effectiveness of the proposed PMPh framework. (a) An ideal lossless edit requires simultaneously satisfying three conditions: correctness of the current edit, preservation of previously edited knowledge, and preservation of original pretrained knowledge. (b) In practice, existing methods exhibit noticeable forgetting of earlier edits as sequential updates accumulate. (c) Knowledge interference analysis. Sequential updates introduce interference between newly edited knowledge and both original and previously edited knowledge, leading to performance degradation.*
 
 ## Requirements
 **At least one A40 48G GPU.**
